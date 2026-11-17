@@ -23,7 +23,7 @@ export default function LoginPage() {
       const payload = JSON.parse(atob(data.access_token.split(".")[1]));
       setAuth({ id: Number(payload.sub), email, name: "", role: payload.role }, data.access_token);
       document.cookie = `token=${data.access_token}; path=/`;
-      router.push(payload.role === "instructor" ? "/instructor/dashboard" : payload.role === "admin" ? "/admin/users" : "/dashboard");
+      router.push(payload.role === "instructor" ? "/instructor/dashboard" : payload.role === "admin" ? "/admin/analytics" : "/dashboard");
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? "Login failed");
     } finally {

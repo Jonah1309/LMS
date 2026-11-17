@@ -5,8 +5,15 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-import razorpay
-import stripe
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
+
+try:
+    import stripe
+except ImportError:
+    stripe = None
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.dependencies import get_current_user, get_db, get_optional_user, require_role
 from app.models.enrollment import Enrollment
 from app.models.course import Course
@@ -9,8 +11,16 @@ from app.models.user import User
 from app.schemas.course import CourseCreate, CourseUpdate, CourseOut, ModuleCreate, ModuleUpdate
 
 import json
+import os
 import re
 from datetime import datetime, timedelta
+
+try:
+    import boto3
+    from botocore.exceptions import ClientError as BotoCoreClientError
+except ImportError:
+    boto3 = None
+    BotoCoreClientError = Exception
 
 router = APIRouter()
 
@@ -293,3 +303,183 @@ def get_module_quiz(
         "passing_score_pct": quiz.passing_score_pct or 70,
         "questions": safe_questions,
     }
+
+
+# --- Content editor endpoints (instructor-only) ---
+
+
+class _VideoIn(BaseModel):
+    s3_key: str | None = None
+
+
+class _TextIn(BaseModel):
+    rich_text_html: str | None = None
+
+
+class _QuizIn(BaseModel):
+    passing_score_pct: int = 70
+    max_attempts: int = 3
+    show_answers_after: bool = True
+    questions: list[dict] = []
+
+
+def _require_course_ownership(course_id: int, db: Session, current_user: User) -> Course:
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.instructor_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return course
+
+
+@router.get("/{course_id}/modules/{module_id:int}/editor")
+def get_module_for_editor(
+    course_id: int,
+    module_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("instructor", "admin")),
+):
+    _require_course_ownership(course_id, db, current_user)
+    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    video = db.query(VideoContent).filter(VideoContent.module_id == module_id).first()
+    text = db.query(TextContent).filter(TextContent.module_id == module_id).first()
+    quiz = db.query(Quiz).filter(Quiz.module_id == module_id).first()
+    questions = []
+    if quiz and quiz.questions:
+        try:
+            questions = json.loads(quiz.questions)
+        except Exception:
+            questions = []
+    return {
+        "id": module.id,
+        "title": module.title,
+        "module_type": module.module_type,
+        "video_content": {"s3_key": video.s3_key} if video else None,
+        "text_content": {"rich_text_html": text.rich_text_html} if text else None,
+        "quiz": {
+            "passing_score_pct": quiz.passing_score_pct,
+            "max_attempts": quiz.max_attempts,
+            "show_answers_after": quiz.show_answers_after,
+            "questions": questions,
+        } if quiz else None,
+    }
+
+
+@router.put("/{course_id}/modules/{module_id:int}/video-content")
+def upsert_video_content(
+    course_id: int,
+    module_id: int,
+    body: _VideoIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("instructor", "admin")),
+):
+    _require_course_ownership(course_id, db, current_user)
+    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    content = db.query(VideoContent).filter(VideoContent.module_id == module_id).first()
+    if content:
+        content.s3_key = body.s3_key
+    else:
+        content = VideoContent(module_id=module_id, s3_key=body.s3_key)
+        db.add(content)
+    db.commit()
+    db.refresh(content)
+    return {"s3_key": content.s3_key}
+
+
+class _UploadUrlRequest(BaseModel):
+    filename: str
+
+
+@router.post("/{course_id}/modules/{module_id:int}/video-upload-url")
+def generate_video_upload_url(
+    course_id: int,
+    module_id: int,
+    body: _UploadUrlRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("instructor", "admin")),
+):
+    _require_course_ownership(course_id, db, current_user)
+    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    if not settings.s3_raw_bucket:
+        raise HTTPException(status_code=503, detail="S3 not configured — set S3_RAW_BUCKET in backend .env")
+    if boto3 is None:
+        raise HTTPException(status_code=503, detail="boto3 not installed — run: pip install boto3")
+    safe_name = os.path.basename(body.filename).replace(" ", "_")
+    s3_key = f"raw-videos/{course_id}/{module_id}/{safe_name}"
+    s3_client = boto3.client(
+        "s3",
+        region_name=settings.aws_region,
+        aws_access_key_id=settings.aws_access_key_id or None,
+        aws_secret_access_key=settings.aws_secret_access_key or None,
+    )
+    try:
+        upload_url = s3_client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": settings.s3_raw_bucket, "Key": s3_key},
+            ExpiresIn=3600,
+        )
+    except BotoCoreClientError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not generate upload URL: {exc}")
+    return {"upload_url": upload_url, "s3_key": s3_key, "expires_in": 3600}
+
+
+@router.put("/{course_id}/modules/{module_id:int}/text-content")
+def upsert_text_content(
+    course_id: int,
+    module_id: int,
+    body: _TextIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("instructor", "admin")),
+):
+    _require_course_ownership(course_id, db, current_user)
+    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    content = db.query(TextContent).filter(TextContent.module_id == module_id).first()
+    if content:
+        content.rich_text_html = body.rich_text_html
+    else:
+        content = TextContent(module_id=module_id, rich_text_html=body.rich_text_html)
+        db.add(content)
+    db.commit()
+    db.refresh(content)
+    return {"rich_text_html": content.rich_text_html}
+
+
+@router.put("/{course_id}/modules/{module_id:int}/quiz-content")
+def upsert_quiz_content(
+    course_id: int,
+    module_id: int,
+    body: _QuizIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("instructor", "admin")),
+):
+    _require_course_ownership(course_id, db, current_user)
+    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    quiz = db.query(Quiz).filter(Quiz.module_id == module_id).first()
+    if quiz:
+        quiz.passing_score_pct = body.passing_score_pct
+        quiz.max_attempts = body.max_attempts
+        quiz.show_answers_after = body.show_answers_after
+        quiz.questions = json.dumps(body.questions)
+    else:
+        quiz = Quiz(
+            module_id=module_id,
+            title="",
+            passing_score_pct=body.passing_score_pct,
+            max_attempts=body.max_attempts,
+            show_answers_after=body.show_answers_after,
+            questions=json.dumps(body.questions),
+        )
+        db.add(quiz)
+    db.commit()
+    db.refresh(quiz)
+    return {"passing_score_pct": quiz.passing_score_pct, "max_attempts": quiz.max_attempts}

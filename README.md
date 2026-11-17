@@ -60,8 +60,8 @@ ministry-lms/
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 20+
+- Python 3.12
+- Node.js 20 LTS
 - npm or pnpm
 
 ### 1 — Clone the repo
@@ -86,8 +86,11 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# Faster alternative using uv (recommended)
+# uv venv && uv pip install -r requirements.txt
+
 # Copy and edit environment variables
-cp ../.env.example .env
+cp .env.example .env
 # Edit .env — at minimum set JWT_SECRET to a random string
 
 # Run database migrations
@@ -108,7 +111,7 @@ cd frontend
 npm install
 
 # Copy and edit environment variables
-cp ../.env.example .env.local
+cp .env.example .env.local
 # NEXT_PUBLIC_API_URL=http://localhost:8000 is the key one for local dev
 
 # Start the dev server (http://localhost:3000)

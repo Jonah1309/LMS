@@ -14,6 +14,7 @@ class User(Base):
     oauth_provider = Column(Enum("email", "google", "apple", name="oauth_provider"), default="email")
     oauth_id = Column(String, nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
     verification_token = Column(String, nullable=True, index=True)
     reset_token = Column(String, nullable=True, index=True)
     reset_token_expires = Column(DateTime, nullable=True)

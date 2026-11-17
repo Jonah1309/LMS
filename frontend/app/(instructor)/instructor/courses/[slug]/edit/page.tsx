@@ -17,7 +17,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Plus, Trash2, Eye, EyeOff, Video, FileText, HelpCircle, Save, Globe, Upload } from "lucide-react";
+import { GripVertical, Plus, Trash2, Eye, EyeOff, Video, FileText, HelpCircle, Save, Globe, Upload, Pencil } from "lucide-react";
 import api from "@/lib/api";
 
 interface Module {
@@ -47,6 +47,7 @@ function ModuleTypeIcon({ type }: { type: string }) {
 
 function SortableModule({
   module,
+  slug,
   onDelete,
   onTogglePreview,
   onUploadCaption,
@@ -54,6 +55,7 @@ function SortableModule({
   vttUploading,
 }: {
   module: Module;
+  slug: string;
   onDelete: (id: number) => void;
   onTogglePreview: (id: number, val: boolean) => void;
   onUploadCaption: (id: number, file: File) => void;
@@ -137,6 +139,14 @@ function SortableModule({
           ? <Eye className="w-4 h-4 text-indigo-500" aria-hidden="true" />
           : <EyeOff className="w-4 h-4" aria-hidden="true" />}
       </button>
+      <a
+        href={`/instructor/courses/${slug}/modules/${module.id}`}
+        title="Edit module content"
+        aria-label={`Edit content for ${module.title}`}
+        className="text-slate-300 hover:text-indigo-500 transition"
+      >
+        <Pencil className="w-4 h-4" aria-hidden="true" />
+      </a>
       <button
         type="button"
         onClick={() => onDelete(module.id)}
@@ -373,6 +383,7 @@ export default function CourseBuilderPage() {
                   <SortableModule
                     key={m.id}
                     module={m}
+                    slug={slug}
                     onDelete={deleteModule}
                     onTogglePreview={togglePreview}
                     onUploadCaption={uploadCaption}
